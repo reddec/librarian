@@ -5,6 +5,10 @@ meta-data (indexed fields).
 
 Go generate capable. Go modules capable.
 
+## Install
+
+`go get -u -v github.com/reddec/librarian/cmd/...`
+
 ## Usage
 
 `librarian  -out some/storage.go some/package/types.go`
