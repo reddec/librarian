@@ -15,6 +15,7 @@ import (
 	"github.com/dave/jennifer/jen"
 	"github.com/fatih/camelcase"
 	"github.com/fatih/structtag"
+	"github.com/jinzhu/inflection"
 	"github.com/reddec/godetector"
 	"github.com/reddec/godetector/deepparser"
 )
@@ -206,7 +207,11 @@ func generateTypes(typeDef *ast.TypeSpec, file *ast.File, tokenSet *token.FileSe
 	// meta data
 	main.Type().Id(metaName).StructFunc(func(meta *jen.Group) {
 		for _, index := range indexes {
-			meta.Id(index.Name()).Id(deepparser.AstPrint(index.Field.Type, tokenSet))
+			if index.Multiple {
+				meta.Id(index.Name()).Index().Id(deepparser.AstPrint(index.Field.Type, tokenSet))
+			} else {
+				meta.Id(index.Name()).Id(deepparser.AstPrint(index.Field.Type, tokenSet))
+			}
 		}
 	})
 	main.Line().Line()
@@ -291,6 +296,9 @@ func getSingle(storageName, typeName string, itemType *jen.Statement, index fiel
 
 func getMulti(storageName, typeName string, itemType jen.Code, index fieldIndex) jen.Code {
 	paramName := asVarName(index.Field.Names[0].Name)
+	if index.Multiple {
+		paramName = inflection.Singular(paramName)
+	}
 	paramType := index.fieldType()
 	return jen.Comment(index.accessor()+" returns multiple "+typeName+" objects filtered by "+asWord(paramName)+".\n"+
 		"Returning slice is not sorted and order is not stable.\n"+
@@ -337,6 +345,9 @@ func removeSingle(storageName, typeName string, index fieldIndex) jen.Code {
 func removeMulti(storageName, typeName string, index fieldIndex) jen.Code {
 	fnName := "Remove" + index.accessor()
 	paramName := asVarName(index.Field.Names[0].Name)
+	if index.Multiple {
+		paramName = inflection.Singular(paramName)
+	}
 	paramType := index.fieldType()
 	return jen.Comment(fnName+" removes multiple "+typeName+" objects filtered by "+asWord(paramName)+".\n"+
 		"If nothing found - operation will be ignored without error.").Line().
@@ -472,6 +483,18 @@ func indexItem(storageName, metaName string, itemType jen.Code, indexes []fieldI
 		for _, index := range indexes {
 			if index.Unique {
 				indexer.Id("storage").Dot(index.indexFieldName()).Index(jen.Id("value").Dot(index.Field.Names[0].String())).Op("=").Id("id")
+			} else if index.Multiple {
+				varName := asVarName(inflection.Singular(index.Name()))
+				indexer.For().List(jen.Id("_"), jen.Id(varName)).Op(":=").Range().Id("value").Dot(index.Name()).BlockFunc(func(iter *jen.Group) {
+					// add each: marker -> id
+					indexStore := jen.Id("storage").Dot(index.indexFieldName()).Index(jen.Id(varName))
+					iter.List(jen.Id(index.indexFieldName()), jen.Id("indexExists")).Op(":=").Add(indexStore)
+					iter.If().Op("!").Id("indexExists").BlockFunc(func(indexNotExists *jen.Group) {
+						indexNotExists.Id(index.indexFieldName()).Op("=").Make(jen.Map(index.fieldType()).Bool())
+						indexNotExists.Add(indexStore).Op("=").Id(index.indexFieldName())
+					})
+					iter.Id(index.indexFieldName()).Index(jen.Id("id")).Op("=").True()
+				})
 			} else {
 				indexStore := jen.Id("storage").Dot(index.indexFieldName()).Index(jen.Id("value").Dot(index.Field.Names[0].String()))
 				indexer.List(jen.Id(index.indexFieldName()), jen.Id("indexExists")).Op(":=").Add(indexStore)
@@ -479,13 +502,17 @@ func indexItem(storageName, metaName string, itemType jen.Code, indexes []fieldI
 					indexNotExists.Id(index.indexFieldName()).Op("=").Make(jen.Map(index.fieldType()).Bool())
 					indexNotExists.Add(indexStore).Op("=").Id(index.indexFieldName())
 				})
-				indexer.Add(indexStore).Index(jen.Id("id")).Op("=").True()
+				indexer.Id(index.indexFieldName()).Index(jen.Id("id")).Op("=").True()
 			}
 			indexer.Line()
 		}
 		indexer.Id("storage").Dot("meta").Index(jen.Id("id")).Op("=").Id(metaName).ValuesFunc(func(group *jen.Group) {
 			for _, index := range indexes {
-				group.Id(index.Name()).Op(":").Id("value").Dot(index.Name())
+				if index.Multiple {
+					group.Id(index.Name()).Op(":").Append(jen.Index().Add(index.fieldType()).Values(), jen.Id("value").Dot(index.Name()).Op("..."))
+				} else {
+					group.Id(index.Name()).Op(":").Id("value").Dot(index.Name())
+				}
 			}
 		})
 	}).Line()
@@ -505,6 +532,15 @@ func removeFromIndex(storageName string, indexes []fieldIndex) jen.Code {
 			indexer.Comment("remove from index by " + asWord(index.Field.Names[0].String()))
 			if index.Unique {
 				indexer.Delete(jen.Id("storage").Dot(index.indexFieldName()), jen.Id("value").Dot(index.Field.Names[0].String()))
+			} else if index.Multiple {
+				varName := asVarName(inflection.Singular(index.Name()))
+				indexer.For().List(jen.Id("_"), jen.Id(varName)).Op(":=").Range().Id("value").Dot(index.Name()).BlockFunc(func(iter *jen.Group) {
+					collection := jen.Id("storage").Dot(index.indexFieldName()).Index(jen.Id(varName))
+					iter.Delete(collection, jen.Id("id"))
+					iter.If().Len(collection).Op("==").Lit(0).BlockFunc(func(empty *jen.Group) {
+						empty.Delete(jen.Id("storage").Dot(index.indexFieldName()), jen.Id(varName))
+					})
+				})
 			} else {
 				indexStore := jen.Id("storage").Dot(index.indexFieldName()).Index(jen.Id("value").Dot(index.Field.Names[0].String()))
 				indexer.Id(index.indexFieldName()).Op(":=").Add(indexStore)
@@ -579,6 +615,7 @@ type fieldIndex struct {
 	Tags     *structtag.Tags
 	Index    string
 	Unique   bool
+	Multiple bool
 	TokenSet *token.FileSet
 }
 
@@ -609,16 +646,27 @@ func inspectStruct(typeDef *ast.TypeSpec, structDef *ast.StructType, tokenSet *t
 		if err != nil {
 			panic(err)
 		}
+		multiple := false
+		if itemType, ok := isArray(field.Type); ok {
+			multiple = true
+			field.Type = itemType
+		}
+
 		if value, err := tags.Get("index"); err == nil {
 			indexName := value.Name
 			if indexName == "" {
-				indexName = "by" + strings.Title(field.Names[0].Name)
+				if multiple {
+					indexName = "by" + inflection.Singular(field.Names[0].Name)
+				} else {
+					indexName = "by" + strings.Title(field.Names[0].Name)
+				}
 			}
 			indexes = append(indexes, fieldIndex{
 				Field:    field,
 				Tags:     tags,
 				Index:    indexName,
-				Unique:   value.HasOption("unique"),
+				Unique:   !multiple && value.HasOption("unique"),
+				Multiple: multiple,
 				TokenSet: tokenSet,
 			})
 		}
@@ -644,4 +692,12 @@ func asWord(str string) string {
 		items[i] = strings.ToLower(it)
 	}
 	return strings.Join(items, " ")
+}
+
+func isArray(node ast.Node) (ast.Expr, bool) {
+	v, ok := node.(*ast.ArrayType)
+	if ok {
+		return v.Elt, ok
+	}
+	return nil, false
 }

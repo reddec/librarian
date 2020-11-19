@@ -42,6 +42,7 @@ type UserStorage struct {
 	indexByName              map[string]string
 	indexByRole              map[string]map[string]bool
 	indexBySocialSecurityNum map[string]string
+	indexByGroup             map[string]map[string]bool
 }
 
 /*
@@ -71,6 +72,7 @@ func (storage *UserStorage) Synchronize(ctx context.Context) error {
 	storage.indexByName = live.indexByName
 	storage.indexByRole = live.indexByRole
 	storage.indexBySocialSecurityNum = live.indexBySocialSecurityNum
+	storage.indexByGroup = live.indexByGroup
 	return nil
 }
 
@@ -153,6 +155,26 @@ func (storage *UserStorage) BySocialSecurityNum(ctx context.Context, ssn string)
 }
 
 /*
+ByGroup returns multiple User objects filtered by group.
+Returning slice is not sorted and order is not stable.
+If nothing found - nil slice will be returned.
+*/
+func (storage *UserStorage) ByGroup(ctx context.Context, group string) ([]User, error) {
+	storage.lock.RLock()
+	defer storage.lock.RUnlock()
+
+	var result []User
+	for id := range storage.indexByGroup[group] {
+		item, err := storage.get(ctx, id)
+		if err != nil {
+			return result, fmt.Errorf("list user by group %s: %w", group, err)
+		}
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+/*
 RemoveByName removes single User object by name.
 If nothing found - operation will be ignored without error.
 */
@@ -207,6 +229,27 @@ func (storage *UserStorage) RemoveBySocialSecurityNum(ctx context.Context, ssn s
 	err := storage.remove(ctx, id)
 	if err != nil {
 		return fmt.Errorf("remove user by ssn %v: %w", ssn, err)
+	}
+	return nil
+}
+
+/*
+RemoveByGroup removes multiple User objects filtered by group.
+If nothing found - operation will be ignored without error.
+*/
+func (storage *UserStorage) RemoveByGroup(ctx context.Context, group string) error {
+	storage.lock.Lock()
+	defer storage.lock.Unlock()
+
+	var ids []string
+	for id := range storage.indexByGroup[group] {
+		ids = append(ids, id)
+	}
+	for _, id := range ids {
+		err := storage.remove(ctx, id)
+		if err != nil {
+			return fmt.Errorf("remove user by group %v: %w", group, err)
+		}
 	}
 	return nil
 }
@@ -324,11 +367,20 @@ func (storage *UserStorage) indexItem(value User, id string) {
 		indexByRole = make(map[string]bool)
 		storage.indexByRole[value.Role] = indexByRole
 	}
-	storage.indexByRole[value.Role][id] = true
+	indexByRole[id] = true
 
 	storage.indexBySocialSecurityNum[value.SSN] = id
 
-	storage.meta[id] = metaUserStorage{Name: value.Name, Role: value.Role, SSN: value.SSN}
+	for _, group := range value.Groups {
+		indexByGroup, indexExists := storage.indexByGroup[group]
+		if !indexExists {
+			indexByGroup = make(map[string]bool)
+			storage.indexByGroup[group] = indexByGroup
+		}
+		indexByGroup[id] = true
+	}
+
+	storage.meta[id] = metaUserStorage{Name: value.Name, Role: value.Role, SSN: value.SSN, Groups: append([]string{}, value.Groups...)}
 }
 
 func (storage *UserStorage) removeItemFromIndex(id string) {
@@ -349,6 +401,14 @@ func (storage *UserStorage) removeItemFromIndex(id string) {
 
 	// remove from index by ssn
 	delete(storage.indexBySocialSecurityNum, value.SSN)
+
+	// remove from index by groups
+	for _, group := range value.Groups {
+		delete(storage.indexByGroup[group], id)
+		if len(storage.indexByGroup[group]) == 0 {
+			delete(storage.indexByGroup, group)
+		}
+	}
 }
 
 func (storage *UserStorage) remove(ctx context.Context, id string) error {
@@ -399,7 +459,8 @@ func (storage *UserStorage) add(ctx context.Context, user User) error {
 }
 
 type metaUserStorage struct {
-	Name string
-	Role string
-	SSN  string
+	Name   string
+	Role   string
+	SSN    string
+	Groups []string
 }
