@@ -153,7 +153,8 @@ func generateTypes(typeDef *ast.TypeSpec, file *ast.File, tokenSet *token.FileSe
 
 	// synchronize index and real storage
 	main.Add(synchronize(storageName, typeName, constructorName, itemType, indexes)).Line()
-
+	// get all items
+	main.Add(getAll(storageName, typeName, itemType)).Line()
 	// access by indexed field
 	for _, index := range indexes {
 		if index.Unique {
@@ -243,6 +244,27 @@ func synchronize(storageName, typeName, constructorName string, itemType jen.Cod
 			sync.Id("storage").Dot(index.indexFieldName()).Op("=").Id("live").Dot(index.indexFieldName())
 		}
 		sync.Return().Nil()
+	}).Line()
+}
+
+func getAll(storageName, typeName string, itemType *jen.Statement) jen.Code {
+	return jen.Comment("All known objects without filtration.\n"+
+		"Returning slice is not sorted and order is not stable.\n"+
+		"Use with caution! All objects will be stored in memory and may cause high GC usage as well as high memory consumption.").Line().
+		Func().Params(jen.Id("storage").Op("*").Id(storageName)).Id("All").
+		Params(jen.Id("ctx").Qual("context", "Context")).
+		Params(jen.Index().Add(itemType), jen.Error()).BlockFunc(func(all *jen.Group) {
+		all.Id("storage").Dot("lock").Dot("RLock").Call()
+		all.Defer().Id("storage").Dot("lock").Dot("RUnlock").Call().Line()
+		all.Var().Id("ans").Op("=").Make(jen.Index().Add(itemType), jen.Lit(0), jen.Len(jen.Id("storage").Dot("meta")))
+		all.For().Id("id").Op(":=").Range().Id("storage").Dot("meta").BlockFunc(func(iter *jen.Group) {
+			iter.List(jen.Id("item"), jen.Err()).Op(":=").Id("storage").Dot("get").Call(jen.Id("ctx"), jen.Id("id"))
+			iter.If().Err().Op("!=").Nil().BlockFunc(func(failed *jen.Group) {
+				failed.Return(jen.Nil(), jen.Qual("fmt", "Errorf").Call(jen.Lit("list all "+asWord(typeName)+": %w"), jen.Err()))
+			})
+			iter.Id("ans").Op("=").Append(jen.Id("ans"), jen.Id("item"))
+		})
+		all.Return(jen.Id("ans"), jen.Nil())
 	}).Line()
 }
 

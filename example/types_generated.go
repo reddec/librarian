@@ -75,6 +75,26 @@ func (storage *UserStorage) Synchronize(ctx context.Context) error {
 }
 
 /*
+All known objects without filtration.
+Returning slice is not sorted and order is not stable.
+Use with caution! All objects will be stored in memory and may cause high GC usage as well as high memory consumption.
+*/
+func (storage *UserStorage) All(ctx context.Context) ([]User, error) {
+	storage.lock.RLock()
+	defer storage.lock.RUnlock()
+
+	var ans = make([]User, 0, len(storage.meta))
+	for id := range storage.meta {
+		item, err := storage.get(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("list all user: %w", err)
+		}
+		ans = append(ans, item)
+	}
+	return ans, nil
+}
+
+/*
 ByName returns single User object filtered by name.
 If nothing found - error will be returned together with empty object.
 */
