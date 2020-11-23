@@ -22,6 +22,7 @@ import (
 
 func main() {
 	out := flag.String("out", "", "output file, empty for stdout")
+	yaml := flag.Bool("yaml", false, "create YAML additional constructor")
 	flag.Parse()
 
 	var gen *jen.File
@@ -50,7 +51,7 @@ func main() {
 				if structDef, ok := typeDef.Type.(*ast.StructType); ok {
 					indexes := inspectStruct(typeDef, structDef, &fs)
 					if len(indexes) > 0 {
-						gen.Add(generateTypes(typeDef, file, &fs, indexes, filepath.Dir(fileName)))
+						gen.Add(generateTypes(typeDef, file, &fs, indexes, filepath.Dir(fileName), *yaml))
 					}
 				}
 			}
@@ -76,7 +77,7 @@ func main() {
 	}
 }
 
-func generateTypes(typeDef *ast.TypeSpec, file *ast.File, tokenSet *token.FileSet, indexes []fieldIndex, dir string) jen.Code {
+func generateTypes(typeDef *ast.TypeSpec, file *ast.File, tokenSet *token.FileSet, indexes []fieldIndex, dir string, yaml bool) jen.Code {
 	typeName := typeDef.Name.String()
 	definition := deepparser.FindDefinitionFromAst(typeName, "", file, dir)
 
@@ -101,38 +102,10 @@ func generateTypes(typeDef *ast.TypeSpec, file *ast.File, tokenSet *token.FileSe
 			values.Id("decoder").Op(":").Id("decoder")
 		})
 	}).Line().Line()
-	// constructor - JSON
-	fnName := "New" + storageName + "JSON"
-	main.Comment(fnName + " create new indexed storage for " + typeName + " with custom storage backend, with data encoded in JSON.").Line().
-		Func().Id(fnName).Params(
-		jen.Id("backend").Qual("github.com/reddec/librarian", "Storage"),
-	).Op("*").Id(storageName).BlockFunc(func(group *jen.Group) {
-		group.Return().Id(constructorName).Call(
-			jen.Id("backend"),
-			encoderType.Clone().BlockFunc(func(encoder *jen.Group) {
-				encoder.Return().Qual("encoding/json", "Marshal").Call(jen.Id("item"))
-			}),
-			decoderType.Clone().BlockFunc(func(decoder *jen.Group) {
-				decoder.Return().Qual("encoding/json", "Unmarshal").Call(jen.Id("data"), jen.Id("item"))
-			}),
-		)
-	}).Line().Line()
-	// constructor - file JSON
-	fnName = "New" + storageName + "FilesJSON"
-	main.Comment(fnName + " creates new indexed storage for " + typeName + " with files in directory as backend storage, with data encoded in JSON.").Line().
-		Func().Id(fnName).Params(
-		jen.Id("directory").String(),
-	).Op("*").Id(storageName).BlockFunc(func(group *jen.Group) {
-		group.Return().Id(constructorName).Call(
-			jen.Qual("github.com/reddec/librarian", "Directory").Call(jen.Id("directory")),
-			encoderType.Clone().BlockFunc(func(encoder *jen.Group) {
-				encoder.Return().Qual("encoding/json", "Marshal").Call(jen.Id("item"))
-			}),
-			decoderType.Clone().BlockFunc(func(decoder *jen.Group) {
-				decoder.Return().Qual("encoding/json", "Unmarshal").Call(jen.Id("data"), jen.Id("item"))
-			}),
-		)
-	}).Line().Line()
+	main.Add(createJSON(storageName, constructorName, typeName, encoderType, decoderType)).Line()
+	if yaml {
+		main.Add(createYAML(storageName, constructorName, typeName, encoderType, decoderType)).Line()
+	}
 	// storage struct
 	main.Comment("Indexed storage for " + asWord(typeName) + ".").
 		Line().Type().Id(storageName).StructFunc(func(group *jen.Group) {
@@ -215,6 +188,80 @@ func generateTypes(typeDef *ast.TypeSpec, file *ast.File, tokenSet *token.FileSe
 		}
 	})
 	main.Line().Line()
+	return main
+}
+
+func createJSON(storageName, constructorName, typeName string, encoderType, decoderType *jen.Statement) jen.Code {
+	var main = jen.Empty()
+	// constructor - JSON
+	fnName := "New" + storageName + "JSON"
+	main.Comment(fnName + " create new indexed storage for " + typeName + " with custom storage backend, with data encoded in JSON.").Line().
+		Func().Id(fnName).Params(
+		jen.Id("backend").Qual("github.com/reddec/librarian", "Storage"),
+	).Op("*").Id(storageName).BlockFunc(func(group *jen.Group) {
+		group.Return().Id(constructorName).Call(
+			jen.Id("backend"),
+			encoderType.Clone().BlockFunc(func(encoder *jen.Group) {
+				encoder.Return().Qual("encoding/json", "Marshal").Call(jen.Id("item"))
+			}),
+			decoderType.Clone().BlockFunc(func(decoder *jen.Group) {
+				decoder.Return().Qual("encoding/json", "Unmarshal").Call(jen.Id("data"), jen.Id("item"))
+			}),
+		)
+	}).Line().Line()
+	// constructor - file JSON
+	fnName = "New" + storageName + "FilesJSON"
+	main.Comment(fnName + " creates new indexed storage for " + typeName + " with files in directory as backend storage, with data encoded in JSON.").Line().
+		Func().Id(fnName).Params(
+		jen.Id("directory").String(),
+	).Op("*").Id(storageName).BlockFunc(func(group *jen.Group) {
+		group.Return().Id(constructorName).Call(
+			jen.Qual("github.com/reddec/librarian", "Directory").Call(jen.Id("directory")),
+			encoderType.Clone().BlockFunc(func(encoder *jen.Group) {
+				encoder.Return().Qual("encoding/json", "Marshal").Call(jen.Id("item"))
+			}),
+			decoderType.Clone().BlockFunc(func(decoder *jen.Group) {
+				decoder.Return().Qual("encoding/json", "Unmarshal").Call(jen.Id("data"), jen.Id("item"))
+			}),
+		)
+	}).Line()
+	return main
+}
+
+func createYAML(storageName, constructorName, typeName string, encoderType, decoderType *jen.Statement) jen.Code {
+	var main = jen.Empty()
+	// constructor - YAML
+	fnName := "New" + storageName + "YAML"
+	main.Comment(fnName + " create new indexed storage for " + typeName + " with custom storage backend, with data encoded in YAML.").Line().
+		Func().Id(fnName).Params(
+		jen.Id("backend").Qual("github.com/reddec/librarian", "Storage"),
+	).Op("*").Id(storageName).BlockFunc(func(group *jen.Group) {
+		group.Return().Id(constructorName).Call(
+			jen.Id("backend"),
+			encoderType.Clone().BlockFunc(func(encoder *jen.Group) {
+				encoder.Return().Qual("gopkg.in/yaml.v2", "Marshal").Call(jen.Id("item"))
+			}),
+			decoderType.Clone().BlockFunc(func(decoder *jen.Group) {
+				decoder.Return().Qual("gopkg.in/yaml.v2", "Unmarshal").Call(jen.Id("data"), jen.Id("item"))
+			}),
+		)
+	}).Line().Line()
+	// constructor - file YAML
+	fnName = "New" + storageName + "FilesYAML"
+	main.Comment(fnName + " creates new indexed storage for " + typeName + " with files in directory as backend storage, with data encoded in YAML.").Line().
+		Func().Id(fnName).Params(
+		jen.Id("directory").String(),
+	).Op("*").Id(storageName).BlockFunc(func(group *jen.Group) {
+		group.Return().Id(constructorName).Call(
+			jen.Qual("github.com/reddec/librarian", "Directory").Call(jen.Id("directory")),
+			encoderType.Clone().BlockFunc(func(encoder *jen.Group) {
+				encoder.Return().Qual("gopkg.in/yaml.v2", "Marshal").Call(jen.Id("item"))
+			}),
+			decoderType.Clone().BlockFunc(func(decoder *jen.Group) {
+				decoder.Return().Qual("gopkg.in/yaml.v2", "Unmarshal").Call(jen.Id("data"), jen.Id("item"))
+			}),
+		)
+	}).Line()
 	return main
 }
 
