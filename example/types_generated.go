@@ -11,7 +11,14 @@ import (
 
 // NewUserStorage creates indexed storage for User.
 func NewUserStorage(backend librarian.Storage, encoder func(item User) ([]byte, error), decoder func(data []byte, item *User) error) *UserStorage {
-	return &UserStorage{backend: backend, encoder: encoder, decoder: decoder}
+	return &UserStorage{backend: backend,
+		encoder:                  encoder,
+		decoder:                  decoder,
+		meta:                     make(map[string]metaUserStorage),
+		indexByName:              make(map[string]string),
+		indexByRole:              make(map[string]map[string]bool),
+		indexBySocialSecurityNum: make(map[string]string),
+		indexByGroup:             make(map[string]map[string]bool)}
 }
 
 // NewUserStorageJSON create new indexed storage for User with custom storage backend, with data encoded in JSON.
@@ -39,10 +46,10 @@ type UserStorage struct {
 	decoder                  func(data []byte, item *User) error
 	lock                     sync.RWMutex
 	meta                     map[string]metaUserStorage // minimal meta information for indexes
-	indexByName              map[string]string
-	indexByRole              map[string]map[string]bool
-	indexBySocialSecurityNum map[string]string
-	indexByGroup             map[string]map[string]bool
+	indexByName              map[string]string          // Name -> ID
+	indexByRole              map[string]map[string]bool // Role -> {ID, ...}
+	indexBySocialSecurityNum map[string]string          // SSN -> ID
+	indexByGroup             map[string]map[string]bool // Groups -> {ID, ...}
 }
 
 /*

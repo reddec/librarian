@@ -98,8 +98,16 @@ func generateTypes(typeDef *ast.TypeSpec, file *ast.File, tokenSet *token.FileSe
 	).Op("*").Id(storageName).BlockFunc(func(group *jen.Group) {
 		group.Return().Op("&").Id(storageName).ValuesFunc(func(values *jen.Group) {
 			values.Id("backend").Op(":").Id("backend")
-			values.Id("encoder").Op(":").Id("encoder")
-			values.Id("decoder").Op(":").Id("decoder")
+			values.Line().Id("encoder").Op(":").Id("encoder")
+			values.Line().Id("decoder").Op(":").Id("decoder")
+			values.Line().Id("meta").Op(":").Make(jen.Map(jen.String()).Id(metaName))
+			for _, index := range indexes {
+				if index.Unique {
+					values.Line().Id(index.indexFieldName()).Op(":").Make(jen.Map(index.fieldType()).String())
+				} else {
+					values.Line().Id(index.indexFieldName()).Op(":").Make(jen.Map(index.fieldType()).Map(jen.String()).Bool())
+				}
+			}
 		})
 	}).Line().Line()
 	main.Add(createJSON(storageName, constructorName, typeName, encoderType, decoderType)).Line()
@@ -116,9 +124,9 @@ func generateTypes(typeDef *ast.TypeSpec, file *ast.File, tokenSet *token.FileSe
 		group.Id("meta").Map(jen.String()).Id(metaName).Comment("minimal meta information for indexes")
 		for _, index := range indexes {
 			if index.Unique {
-				group.Id(index.indexFieldName()).Map(jen.Id(deepparser.AstPrint(index.Field.Type, tokenSet))).String()
+				group.Id(index.indexFieldName()).Map(jen.Id(deepparser.AstPrint(index.Field.Type, tokenSet))).String().Comment(index.Name() + " -> ID")
 			} else {
-				group.Id(index.indexFieldName()).Map(jen.Id(deepparser.AstPrint(index.Field.Type, tokenSet))).Map(jen.String()).Bool()
+				group.Id(index.indexFieldName()).Map(jen.Id(deepparser.AstPrint(index.Field.Type, tokenSet))).Map(jen.String()).Bool().Comment(index.Name() + " -> {ID, ...}")
 			}
 		}
 	})

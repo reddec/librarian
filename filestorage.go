@@ -19,9 +19,6 @@ type filesBackend struct {
 }
 
 func (fb *filesBackend) Get(ctx context.Context, id string) ([]byte, error) {
-	if _, err := uuid.Parse(id); err != nil {
-		return nil, err
-	}
 	return ioutil.ReadFile(filepath.Join(fb.directory, id))
 }
 
@@ -50,16 +47,10 @@ func (fb *filesBackend) Iterate(ctx context.Context, iterator func(id string, da
 }
 
 func (fb *filesBackend) Delete(ctx context.Context, id string) error {
-	if _, err := uuid.Parse(id); err != nil {
-		return nil
-	}
 	return os.Remove(filepath.Join(fb.directory, id))
 }
 
 func (fb *filesBackend) Update(ctx context.Context, id string, data []byte) error {
-	if _, err := uuid.Parse(id); err != nil {
-		return nil
-	}
 	return ioutil.WriteFile(filepath.Join(fb.directory, id), data, 0600)
 }
 
