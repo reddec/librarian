@@ -37,9 +37,6 @@ func (fb *filesBackend) Iterate(ctx context.Context, iterator func(id string, da
 		if item.IsDir() {
 			continue
 		}
-		if _, err := uuid.Parse(item.Name()); err != nil {
-			continue
-		}
 		data, err := ioutil.ReadFile(filepath.Join(fb.directory, item.Name()))
 		if err != nil {
 			return err
